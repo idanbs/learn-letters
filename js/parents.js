@@ -278,7 +278,8 @@ export function recorder(start = 0) {
     }
     if (!alive) return;
     setState('idle');
-    if (sourceOf(key) === 'recorded' && item().key === key) say(key);
+    // Give iOS a moment to switch the speaker back after the microphone closes.
+    if (sourceOf(key) === 'recorded') setTimeout(() => alive && item().key === key && state === 'idle' && say(key), 250);
   }
 
   function cancelRecording() {

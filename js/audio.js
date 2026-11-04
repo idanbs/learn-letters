@@ -5,16 +5,24 @@
 import { CLIPS } from './data.js';
 import { recordingKeys, loadRecording } from './recordings.js';
 
-let ctx = null;
+let ctx = null; // Web Audio: only for the short sound effects
 let manifest = {};
 let recorded = new Set();
-const buffers = new Map();
-let source = null;
+const urls = new Map(); // key -> playable URL (blob: URLs for recordings)
 let finishCurrent = null;
 let token = 0;
 let heVoice = null;
 let speechPrimed = false;
+let playerPrimed = false;
 let cancelledAt = -Infinity;
+
+// One shared <audio> element plays every voice clip. Unlike Web Audio it needs no decoding up front,
+// it keeps working after iOS pauses audio (background, screen lock, microphone use), and once it has
+// played from a tap, iOS lets it play from timers too (the next question in a game, etc.).
+const player = new Audio();
+player.preload = 'auto';
+player.setAttribute('playsinline', '');
+const SILENCE = 'data:audio/wav;base64,UklGRmQGAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YUAGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 export async function initAudio() {
   // Let iPhone play sound even when the silent switch is on (Safari 17+).
@@ -30,6 +38,9 @@ export async function initAudio() {
     manifest = {};
   }
   await refreshRecordings();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+  });
 }
 
 export async function refreshRecordings() {
@@ -38,14 +49,20 @@ export async function refreshRecordings() {
   } catch {
     recorded = new Set();
   }
-  buffers.clear();
+  for (const key of [...urls.keys()]) forget(key);
 }
 
 // Call after a recording is saved or deleted so the next say() picks it up.
 export function markRecorded(key, isRecorded) {
   if (isRecorded) recorded.add(key);
   else recorded.delete(key);
-  buffers.delete(key);
+  forget(key);
+}
+
+function forget(key) {
+  const url = urls.get(key);
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+  urls.delete(key);
 }
 
 export const sourceOf = (key) => (recorded.has(key) ? 'recorded' : manifest[key] ? 'file' : 'tts');
@@ -69,11 +86,20 @@ function pickVoice() {
 // Must run inside a user gesture once; iOS keeps audio locked until then.
 export function unlock(e) {
   // Speech needs its own unlock, and only a touch-end style gesture counts on iOS.
-  if (!speechPrimed && 'speechSynthesis' in window && e?.type !== 'pointerdown') {
+  const gesture = e?.type !== 'pointerdown';
+  if (gesture && !speechPrimed && 'speechSynthesis' in window) {
     speechPrimed = true;
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0;
     speechSynthesis.speak(u);
+  }
+  // Play silence once from a tap so the shared player is allowed to play later on its own.
+  if (gesture && !playerPrimed && player.paused) {
+    playerPrimed = true;
+    player.src = SILENCE;
+    player.play()?.catch((err) => {
+      if (err?.name === 'NotAllowedError') playerPrimed = false;
+    });
   }
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -93,10 +119,7 @@ export function stopAll() {
 }
 
 function halt() {
-  if (source) {
-    try { source.stop(); } catch { /* already stopped */ }
-    source = null;
-  }
+  if (!player.paused) player.pause();
   if ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) {
     speechSynthesis.cancel();
     cancelledAt = performance.now();
@@ -120,46 +143,57 @@ export function say(...keys) {
 
 const hasAudio = (key) => recorded.has(key) || !!manifest[key];
 
+// Readies recordings one at a time in the background, so a clip that is actually tapped
+// never waits behind a whole screen's worth of loading.
+let preloadQueue = Promise.resolve();
 export function preload(keys) {
-  if (!ctx) return;
-  for (const key of keys) if (hasAudio(key)) loadBuffer(key).catch(() => {});
+  for (const key of keys) {
+    if (recorded.has(key) && !urls.has(key)) preloadQueue = preloadQueue.then(() => clipUrl(key)).catch(() => {});
+  }
 }
 
-function loadBuffer(key) {
-  if (!buffers.has(key)) {
-    const bytes = recorded.has(key)
-      ? loadRecording(key).then((r) => {
-          if (!r) throw new Error(`recording ${key} missing`);
-          return r.data.slice(0);
-        })
-      : fetch(`audio/${manifest[key]}`).then((r) => {
-          if (!r.ok) throw new Error(`audio ${key}: ${r.status}`);
-          return r.arrayBuffer();
-        });
-    const p = bytes.then((data) => new Promise((resolve, reject) => ctx.decodeAudioData(data, resolve, reject)));
-    p.catch(() => buffers.delete(key));
-    buffers.set(key, p);
+async function clipUrl(key) {
+  if (urls.has(key)) return urls.get(key);
+  let url;
+  if (recorded.has(key)) {
+    const r = await loadRecording(key);
+    if (!r) throw new Error(`recording ${key} missing`);
+    if (urls.has(key)) return urls.get(key);
+    url = URL.createObjectURL(new Blob([r.data], { type: r.type || 'audio/wav' }));
+  } else {
+    url = `audio/${manifest[key]}`;
   }
-  return buffers.get(key);
+  urls.set(key, url);
+  return url;
+}
+
+function playUrl(url) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = 0;
+    const settle = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      player.onended = null;
+      player.onerror = null;
+      fn(arg);
+    };
+    player.onended = () => settle(resolve);
+    player.onerror = () => settle(reject, new Error('audio playback failed'));
+    finishCurrent = () => settle(resolve);
+    timer = setTimeout(() => settle(resolve), 20000); // never hang the app on a stuck clip
+    player.src = url;
+    player.play()?.catch((err) => settle(reject, err));
+  });
 }
 
 async function playClip(key, my) {
-  if (hasAudio(key) && ctx) {
+  if (hasAudio(key)) {
     try {
-      const buffer = await loadBuffer(key);
+      const url = await clipUrl(key);
       if (my !== token) return;
-      await new Promise((resolve) => {
-        const s = ctx.createBufferSource();
-        s.buffer = buffer;
-        s.connect(ctx.destination);
-        finishCurrent = resolve;
-        s.onended = () => {
-          if (source === s) source = null;
-          resolve();
-        };
-        source = s;
-        s.start();
-      });
+      await playUrl(url);
       return;
     } catch {
       // fall through to text-to-speech

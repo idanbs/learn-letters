@@ -621,8 +621,15 @@ button:focus-visible {
   animation: arrow 0.9s ease-in-out infinite;
 }
 
+/* Hidden animations still repaint every frame, so stop them instead of just hiding them. */
 .tracer.dragging .arrow {
   opacity: 0;
+}
+
+.tracer.dragging .arrow path,
+.tracer.finished .arrow path,
+.tracer.finished .knob-halo {
+  animation: none;
 }
 
 .tracer.finished .knob,
@@ -669,6 +676,7 @@ button:focus-visible {
 
 .burst span {
   position: absolute;
+  will-change: transform, opacity;
   font-size: clamp(26px, 6dvmin, 64px);
   line-height: 1;
 }

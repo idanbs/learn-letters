@@ -8,9 +8,18 @@ export const canRecord = () => !!(navigator.mediaDevices?.getUserMedia && window
 // Resolves once the microphone is actually recording. The mic is released after every take,
 // so iPhone playback goes back to the loud speaker right away.
 export async function startRecording() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  // The app normally asks iOS for a playback-only audio session; recording needs it switched.
+  const session = navigator.audioSession;
+  if (session) session.type = 'auto';
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (e) {
+    if (session) session.type = 'playback';
+    throw e;
+  }
   const type = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'].find(
     (t) => MediaRecorder.isTypeSupported?.(t),
   );
@@ -21,7 +30,10 @@ export async function startRecording() {
   };
   const started = new Promise((resolve) => (rec.onstart = resolve));
   const stopped = new Promise((resolve) => (rec.onstop = resolve));
-  const release = () => stream.getTracks().forEach((t) => t.stop());
+  const release = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    if (session) session.type = 'playback';
+  };
   rec.start();
   await started;
   return {
