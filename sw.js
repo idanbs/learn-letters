@@ -1,7 +1,7 @@
 // Offline support: cache the whole app on install, then serve from cache and
 // refresh in the background (an update shows up on the next launch).
-// Bump VERSION when files are added or removed.
-const VERSION = 'v2';
+// Bump VERSION with every update so the app re-downloads everything in one go.
+const VERSION = 'v3';
 const CACHE = `letters-${VERSION}`;
 const SHELL = [
   './',
@@ -37,10 +37,12 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      await cache.addAll(SHELL);
+      // 'reload' skips the browser's HTTP cache (GitHub Pages lets it keep files for 10 minutes).
+      const fresh = (url) => new Request(url, { cache: 'reload' });
+      await cache.addAll(SHELL.map(fresh));
       try {
         const clips = await (await fetch('audio/manifest.json', { cache: 'no-cache' })).json();
-        await cache.addAll(Object.values(clips).map((f) => `audio/${f}`));
+        await cache.addAll(Object.values(clips).map((f) => fresh(`audio/${f}`)));
       } catch {
         // no recordings yet
       }
@@ -65,7 +67,8 @@ self.addEventListener('fetch', (event) => {
     (async () => {
       const cache = await caches.open(CACHE);
       const cached = await cache.match(request, { ignoreSearch: true });
-      const fresh = fetch(request)
+      // 'no-cache' revalidates with the server (a cheap 304 when nothing changed).
+      const fresh = fetch(request.url, { cache: 'no-cache' })
         .then((res) => {
           if (res.ok) cache.put(request, res.clone());
           return res;
