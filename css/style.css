@@ -1568,3 +1568,25 @@ button:focus-visible {
     animation: none;
   }
 }
+
+.app-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: 0 4px 0 var(--lip-soft);
+}
+
+.app-version {
+  color: #6b5d94;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.app-info .pill-btn.small {
+  align-self: auto;
+}

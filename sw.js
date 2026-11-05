@@ -1,7 +1,7 @@
 // Offline support: cache the whole app on install, then serve from cache and
 // refresh in the background (an update shows up on the next launch).
 // Bump VERSION with every update so the app re-downloads everything in one go.
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = `letters-${VERSION}`;
 const SHELL = [
   './',
@@ -24,6 +24,7 @@ const SHELL = [
   'js/zip.js',
   'js/progress.js',
   'js/practice.js',
+  'js/updates.js',
   'fonts/rubik-hebrew-500-normal.woff2',
   'fonts/rubik-hebrew-700-normal.woff2',
   'fonts/rubik-latin-500-normal.woff2',

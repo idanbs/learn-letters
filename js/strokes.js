@@ -6,10 +6,13 @@
 export const STROKE_WIDTH = 18;
 
 export const LETTER_STROKES = {
+  // The main diagonal, then a stem from the top right that bends into the diagonal's lower half
+  // (about 3/4 of the way down), then a stem that bends out of its upper half (about 1/4) down to
+  // the bottom left. The two stems mirror each other, so the three parts never blur into an X.
   alef: [
     'M 22 9 L 80 91',
-    'M 79 9 L 79 26 Q 79 44 53 47',
-    'M 51 52 C 30 54 20 64 20 91',
+    'M 80 9 L 80 32 Q 80 60 69 63',
+    'M 33 37 Q 22 40 22 68 L 22 91',
   ],
   bet: [
     'M 18 9 L 62 9 Q 76 9 76 23 L 76 91',

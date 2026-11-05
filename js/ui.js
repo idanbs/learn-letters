@@ -1,4 +1,4 @@
-// Small DOM helpers, icons, and the celebration burst.
+// Small DOM helpers, icons, and the celebrations.
 
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -19,11 +19,18 @@ export function h(tag, props, ...children) {
 
 // Toddler-proof tap: fires on release if the finger is still over the element,
 // even if it wandered a bit (a plain click is cancelled by small movements on iOS).
+// A finger that travels further than MAX_TAP_TRAVEL was swiping, not tapping.
+const MAX_TAP_TRAVEL = 45;
+
 export function onTap(el, fn) {
   let active = null;
+  let startX = 0;
+  let startY = 0;
   el.addEventListener('pointerdown', (e) => {
     if (active !== null || (e.pointerType === 'mouse' && e.button !== 0)) return;
     active = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
     el.classList.add('pressed');
     try { el.setPointerCapture(e.pointerId); } catch { /* element may be detached */ }
   });
@@ -31,7 +38,7 @@ export function onTap(el, fn) {
     if (e.pointerId !== active) return;
     active = null;
     el.classList.remove('pressed');
-    if (!fire) return;
+    if (!fire || Math.hypot(e.clientX - startX, e.clientY - startY) > MAX_TAP_TRAVEL) return;
     const r = el.getBoundingClientRect();
     const slack = 24;
     if (e.clientX >= r.left - slack && e.clientX <= r.right + slack && e.clientY >= r.top - slack && e.clientY <= r.bottom + slack) {
@@ -159,6 +166,84 @@ export function celebrate({ from = null, big = false } = {}) {
     );
   }
   setTimeout(() => layer.remove(), 1800);
+}
+
+// Big wins get a random show so it stays a surprise: balloons, confetti, or a big star burst.
+export function party() {
+  const pick = Math.floor(Math.random() * 3);
+  if (reduceMotion() || pick === 0) celebrate({ big: true });
+  else if (pick === 1) balloons();
+  else confetti();
+}
+
+function balloons() {
+  const layer = h('div', { class: 'burst', 'aria-hidden': 'true' });
+  document.body.append(layer);
+  const count = 12;
+  for (let i = 0; i < count; i++) {
+    const size = 0.8 + Math.random() * 0.7;
+    const b = h('span', { style: { left: `${(i + 0.5) * (100 / count) + (Math.random() - 0.5) * 6}%`, top: '100%', 'font-size': `calc(clamp(34px, 8dvmin, 80px) * ${size})` } }, i % 4 === 3 ? '⭐' : '🎈');
+    layer.append(b);
+    const sway = (Math.random() - 0.5) * 80;
+    b.animate(
+      [
+        { transform: 'translate(-50%, 0) rotate(-6deg)' },
+        { transform: `translate(calc(-50% + ${sway}px), -55vh) rotate(6deg)`, offset: 0.5 },
+        { transform: `translate(calc(-50% - ${sway / 2}px), calc(-100vh - 120%)) rotate(-4deg)` },
+      ],
+      { duration: 2400 + Math.random() * 900, delay: Math.random() * 400, easing: 'cubic-bezier(.3,.1,.6,1)', fill: 'both' },
+    );
+  }
+  setTimeout(() => layer.remove(), 3800);
+}
+
+function confetti() {
+  const layer = h('div', { class: 'burst', 'aria-hidden': 'true' });
+  document.body.append(layer);
+  const count = 60;
+  for (let i = 0; i < count; i++) {
+    const piece = h('i', {
+      class: 'confetti',
+      style: { left: `${Math.random() * 100}%`, background: COLORS[i % COLORS.length], 'border-radius': i % 3 ? '2px' : '50%' },
+    });
+    layer.append(piece);
+    const drift = (Math.random() - 0.5) * 160;
+    const spin = (Math.random() - 0.5) * 1080;
+    piece.animate(
+      [
+        { transform: 'translate(0, -5vh) rotate(0deg)', opacity: 1 },
+        { transform: `translate(${drift}px, 105vh) rotate(${spin}deg)`, opacity: 1 },
+      ],
+      { duration: 1600 + Math.random() * 1200, delay: Math.random() * 500, easing: 'cubic-bezier(.25,.4,.45,1)', fill: 'both' },
+    );
+  }
+  setTimeout(() => layer.remove(), 3500);
+}
+
+// A new sticker: pops up in the middle, wobbles, then flies off into the album corner.
+export function stickerPop(emoji) {
+  const layer = h('div', { class: 'sticker-layer', 'aria-hidden': 'true' });
+  const card = h('div', { class: 'sticker-pop' }, h('span', { class: 'sticker-rays' }), h('span', { class: 'sticker-face' }, emoji));
+  layer.append(card);
+  document.body.append(layer);
+  // The album button lives in the top inline-start corner (top right in Hebrew).
+  const dx = innerWidth / 2 - 60;
+  const dy = -(innerHeight / 2 - 60);
+  const anim = card.animate(
+    reduceMotion()
+      ? [{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }]
+      : [
+          { transform: 'translate(-50%, -50%) scale(0) rotate(-40deg)', opacity: 0 },
+          { transform: 'translate(-50%, -50%) scale(1.2) rotate(10deg)', opacity: 1, offset: 0.16, easing: 'ease-out' },
+          { transform: 'translate(-50%, -50%) scale(0.95) rotate(-5deg)', opacity: 1, offset: 0.26 },
+          { transform: 'translate(-50%, -50%) scale(1) rotate(-3deg)', opacity: 1, offset: 0.68, easing: 'cubic-bezier(.5,0,.75,0)' },
+          { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(0.15) rotate(-3deg)`, opacity: 0.4 },
+        ],
+    { duration: 2300, fill: 'forwards' },
+  );
+  const done = () => layer.remove();
+  anim.onfinish = done;
+  setTimeout(done, 2700);
 }
 
 export function shake(el) {

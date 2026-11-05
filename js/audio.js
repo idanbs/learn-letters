@@ -264,4 +264,7 @@ export const sfx = {
   success: () =>
     [523, 659, 784, 1047].forEach((f, i) => tone({ freq: f, dur: 0.25, type: 'triangle', gain: 0.18, delay: i * 0.09 })),
   oops: () => tone({ freq: 320, to: 190, dur: 0.28, gain: 0.16 }),
+  // A bright little sparkle for a new sticker.
+  sticker: () =>
+    [784, 1175, 988, 1568].forEach((f, i) => tone({ freq: f, dur: 0.18, type: 'sine', gain: 0.16, delay: 0.05 + i * 0.07 })),
 };

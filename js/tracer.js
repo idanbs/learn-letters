@@ -3,6 +3,7 @@
 // so it can never leave the shape: the finger only has to move in the general direction.
 // Progress is one-way (the ball never slides back) and can only advance a little at a time,
 // so tapping the end of a stroke or scribbling elsewhere doesn't skip ahead.
+// A faint "ghost" ball shows the way along each stroke before she starts, and again if she's stuck.
 import { samplePath, bounds } from './path.js';
 import { STROKE_WIDTH } from './strokes.js';
 import { sfx } from './audio.js';
@@ -13,6 +14,8 @@ const KNOB_R = 13;
 const GRAB_RADIUS = 34; // how close to the ball a touch must start (letter units, ~1/3 of the letter)
 const LOOKAHEAD = 26; // max arc length the ball may jump per move event
 const TOLERANCE = 38; // finger may be this far from the road and still pull the ball
+const END_SNAP = 9; // lifting the finger this close to a stroke's end still counts as finishing it
+const IDLE_DEMO_MS = 7000; // show the way again after this long without touching
 const FRAME_W = 124;
 const FRAME_H = 150;
 
@@ -21,6 +24,25 @@ const el = (tag, attrs = {}) => {
   for (const k in attrs) e.setAttribute(k, attrs[k]);
   return e;
 };
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The point at arc length `len` along a sampled stroke.
+function pointAtLength(s, len) {
+  let lo = 0;
+  let hi = s.cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (s.cum[mid] < len) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo === 0) return s.pts[0];
+  const span = s.cum[lo] - s.cum[lo - 1] || 1;
+  const t = (len - s.cum[lo - 1]) / span;
+  const [ax, ay] = s.pts[lo - 1];
+  const [bx, by] = s.pts[lo];
+  return [ax + (bx - ax) * t, ay + (by - ay) * t];
+}
+
 const pointsAttr = (pts, from = 0, to = pts.length) => {
   let s = '';
   for (let i = from; i < to; i++) s += `${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)} `;
@@ -44,13 +66,18 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
   const gOutline = el('g', { class: 'road-outline', 'stroke-width': W + 7 });
   const gRoad = el('g', { class: 'road', 'stroke-width': W });
   const gDone = el('g', { class: 'painted', 'stroke-width': W });
+  const gShine = el('g', { class: 'shine', 'stroke-width': W * 0.26 });
   for (const s of strokes) {
     gOutline.append(el('path', { d: s.d }));
     gRoad.append(el('path', { d: s.d }));
     s.paint = el('polyline', { points: '' });
     gDone.append(s.paint);
+    s.shine = el('polyline', { points: '' });
+    gShine.append(s.shine);
   }
+  const gSparkles = el('g', { class: 'sparkles' });
   const guide = el('polyline', { class: 'guide', points: '' });
+  const ghost = el('circle', { class: 'ghost', r: KNOB_R * 0.6 });
   const arrow = el('g', { class: 'arrow' });
   arrow.append(el('path', { d: 'M -4 -6 L 4 0 L -4 6' }));
   const knob = el('g', { class: 'knob' });
@@ -59,13 +86,14 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
   const star = el('text', { class: 'knob-star', 'text-anchor': 'middle', 'dominant-baseline': 'central', y: 1 });
   star.textContent = '⭐';
   knob.append(star);
-  svg.append(gOutline, gRoad, gDone, guide, arrow, knob);
+  svg.append(gOutline, gRoad, gDone, gShine, gSparkles, guide, ghost, arrow, knob);
 
   let cur = 0; // current stroke index
   let idx = 0; // index into current stroke's points
   let dragging = null; // pointerId
   let finished = false;
   let lastTickAt = 0;
+  let sparkleTravel = 0;
 
   function knobPos() {
     return strokes[cur].pts[idx];
@@ -74,7 +102,9 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
   function render({ jump = false } = {}) {
     if (finished) return;
     const s = strokes[cur];
-    s.paint.setAttribute('points', pointsAttr(s.pts, 0, idx + 1));
+    const painted = pointsAttr(s.pts, 0, idx + 1);
+    s.paint.setAttribute('points', painted);
+    s.shine.setAttribute('points', painted);
     guide.setAttribute('points', pointsAttr(s.pts, idx));
     const [x, y] = knobPos();
     knob.classList.toggle('jump', jump);
@@ -114,7 +144,12 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
       }
     }
     if (bestD > TOLERANCE || best === idx) return;
+    sparkleTravel += s.cum[best] - s.cum[idx];
     idx = best;
+    if (sparkleTravel >= 5) {
+      sparkleTravel = 0;
+      sparkle(s.pts[idx]);
+    }
     const now = performance.now();
     if (now - lastTickAt > 90) {
       lastTickAt = now;
@@ -130,12 +165,16 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
   function completeStroke() {
     const s = strokes[cur];
     idx = s.pts.length - 1;
-    s.paint.setAttribute('points', pointsAttr(s.pts));
+    const all = pointsAttr(s.pts);
+    s.paint.setAttribute('points', all);
+    s.shine.setAttribute('points', all);
     sfx.pop();
     onStrokeDone?.(cur);
     if (cur === strokes.length - 1) {
       finished = true;
       dragging = null;
+      stopDemo();
+      clearTimeout(idleTimer);
       guide.setAttribute('points', '');
       svg.classList.add('finished');
       onDone?.();
@@ -149,21 +188,89 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
     if (Math.hypot(end[0] - start[0], end[1] - start[1]) > 6) dragging = null;
     svg.classList.toggle('dragging', dragging !== null);
     render({ jump: true });
+    if (dragging === null) demo(550);
+  }
+
+  // ---- Little sparkles behind the ball ----
+  function sparkle([x, y]) {
+    if (reduceMotion() || gSparkles.childElementCount > 24) return;
+    const c = el('circle', {
+      class: `sparkle sp${Math.floor(Math.random() * 3)}`,
+      cx: (x + (Math.random() - 0.5) * W * 0.9).toFixed(1),
+      cy: (y + (Math.random() - 0.5) * W * 0.9).toFixed(1),
+      r: (1.4 + Math.random() * 1.8).toFixed(1),
+    });
+    gSparkles.append(c);
+    setTimeout(() => c.remove(), 700);
+  }
+
+  // ---- "Show me": a ghost ball runs ahead along the rest of the current stroke ----
+  let demoRaf = 0;
+  let demoTimer = 0;
+  let idleTimer = 0;
+
+  function stopDemo() {
+    cancelAnimationFrame(demoRaf);
+    clearTimeout(demoTimer);
+    demoRaf = 0;
+    ghost.classList.remove('on');
+  }
+
+  function demo(delay = 0) {
+    stopDemo();
+    if (finished || reduceMotion()) return;
+    demoTimer = setTimeout(() => {
+      if (!svg.isConnected || finished || dragging !== null) return;
+      const s = strokes[cur];
+      const from = s.cum[idx];
+      const span = s.length - from;
+      const duration = Math.min(1700, Math.max(650, span * 11));
+      const t0 = performance.now();
+      const step = (now) => {
+        if (!svg.isConnected || finished || dragging !== null) return stopDemo();
+        const t = Math.min(1, (now - t0) / duration);
+        const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+        const [x, y] = pointAtLength(s, from + eased * span);
+        ghost.style.transform = `translate(${x}px, ${y}px)`;
+        ghost.classList.add('on');
+        if (t < 1) demoRaf = requestAnimationFrame(step);
+        else {
+          demoRaf = 0;
+          setTimeout(() => ghost.classList.remove('on'), 120);
+        }
+      };
+      demoRaf = requestAnimationFrame(step);
+    }, delay);
+  }
+
+  // If nothing happens for a while, show the way again.
+  function armIdle() {
+    clearTimeout(idleTimer);
+    if (finished) return;
+    idleTimer = setTimeout(() => {
+      if (!svg.isConnected) return;
+      if (dragging === null) demo();
+      armIdle();
+    }, IDLE_DEMO_MS);
   }
 
   function onDown(e) {
     if (finished || dragging !== null) return;
     const p = toLocal(e);
     if (!p) return;
+    armIdle();
     const [kx, ky] = knobPos();
     if (Math.hypot(p[0] - kx, p[1] - ky) > GRAB_RADIUS) {
-      // Touched somewhere else: wiggle the ball to show where to start.
+      // Touched somewhere else: wiggle the ball and show the way from it.
       knob.classList.remove('hint');
       void knob.getBoundingClientRect();
       knob.classList.add('hint');
+      demo(250);
       return;
     }
     e.preventDefault();
+    stopDemo();
+    sparkleTravel = 0;
     dragging = e.pointerId;
     try { svg.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     svg.classList.add('dragging');
@@ -182,16 +289,20 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
     }
   }
 
-  function onUp(e) {
+  function onUp(e, released = true) {
     if (e.pointerId !== dragging) return;
     dragging = null;
     svg.classList.remove('dragging');
+    armIdle();
+    // Little fingers often stop just short of the end: that still counts.
+    const s = strokes[cur];
+    if (released && !finished && s.length - s.cum[idx] <= Math.min(END_SNAP, s.length * 0.3)) completeStroke();
   }
 
   svg.addEventListener('pointerdown', onDown);
   svg.addEventListener('pointermove', onMove);
-  svg.addEventListener('pointerup', onUp);
-  svg.addEventListener('pointercancel', onUp);
+  svg.addEventListener('pointerup', (e) => onUp(e, true));
+  svg.addEventListener('pointercancel', (e) => onUp(e, false));
 
   function reset() {
     cur = 0;
@@ -199,11 +310,18 @@ export function createTracer(strokeDefs, { color, onStrokeDone, onDone } = {}) {
     dragging = null;
     finished = false;
     svg.classList.remove('finished', 'dragging');
-    for (const s of strokes) s.paint.setAttribute('points', '');
+    for (const s of strokes) {
+      s.paint.setAttribute('points', '');
+      s.shine.setAttribute('points', '');
+    }
     render({ jump: true });
+    demo(500);
+    armIdle();
   }
 
   render();
+  demo(900);
+  armIdle();
 
   return {
     el: svg,

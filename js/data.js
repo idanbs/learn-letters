@@ -53,6 +53,7 @@ export const CLIPS = {
   'praise-4': 'יָפֶה מְאוֹד!',
   'praise-5': 'בְּדִיּוּק!',
   'stars-5': 'הִצְלַחְנוּ! חֲמִשָּׁה כּוֹכָבִים!',
+  'how-many': 'כַּמָּה יֵשׁ?',
 };
 for (const l of LETTERS) {
   CLIPS[`name-${l.id}`] = l.name;
@@ -91,9 +92,37 @@ export const CLIP_GROUPS = [
   },
   {
     title: 'מספרים',
-    items: NUMBERS.flatMap((x) => [
+    items: [
+      { key: 'how-many', hint: 'שאלה במשחק "איפה?" כשסופרים חפצים' },
+      ...NUMBERS.flatMap((x) => [
       { key: `num-${x.n}`, hint: `המספר ${x.n} (גם בספירה)` },
       { key: `find-num-${x.n}`, hint: 'שאלה במשחק "איפה?"' },
-    ]),
+      ]),
+    ],
   },
+];
+
+// Letters (and digits) that are easy to mix up. At the easy level they never appear side by side.
+export const LOOK_ALIKE = [
+  ['bet', 'kaf', 'pe'],
+  ['dalet', 'resh'],
+  ['he', 'het', 'tav', 'qof'],
+  ['vav', 'zayin', 'yod'],
+  ['gimel', 'nun'],
+  ['samekh', 'tet'],
+  ['ayin', 'tsadi'],
+];
+export const DIGIT_LOOK_ALIKE = [[1, 7], [6, 9], [3, 8], [2, 5]];
+
+// Things to count in the "how many?" rounds.
+export const COUNT_THINGS = ['🐥', '🍎', '🍓', '🌸', '⭐', '🎈', '🐞', '🦋', '🍪', '🚗', '🐢', '🍌', '🐟', '🧸'];
+
+// The sticker album, in album order. A new sticker is a random one she doesn't have yet.
+export const STICKERS = [
+  '🐶', '🐱', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯',
+  '🦁', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🐤',
+  '🦉', '🦄', '🐝', '🦋', '🐞', '🐢', '🐙', '🦀',
+  '🐠', '🐬', '🐳', '🦒', '🐘', '🦓', '🦔', '🦩',
+  '🌈', '🚀', '🚂', '🚒', '⛵', '🎈', '🍓', '🍉',
+  '🍦', '🧁', '🌻', '🌙', '☀️', '🍭', '🎂', '🌸',
 ];
