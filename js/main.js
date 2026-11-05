@@ -8,6 +8,20 @@ for (const type of ['pointerdown', 'pointerup', 'touchend', 'click']) {
   document.addEventListener(type, unlock, { capture: true, passive: true });
 }
 
+// Toddler-proofing: a two-finger pinch would zoom the whole app and leave her stuck in a zoomed
+// view she can't get out of. Zoom normally has to stay available, but this app's user is three;
+// adults still have the system Zoom (Settings > Accessibility).
+for (const type of ['gesturestart', 'gesturechange']) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener(
+  'touchmove',
+  (e) => {
+    if (e.touches.length > 1) e.preventDefault();
+  },
+  { passive: false },
+);
+
 initAudio();
 go(home);
 

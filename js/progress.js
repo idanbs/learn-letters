@@ -76,6 +76,26 @@ export function markStickersSeen() {
   save();
 }
 
+// ---- Backup ----
+
+export const exportProgress = () => JSON.parse(JSON.stringify(state));
+
+// Brings a backup back without losing anything earned since: for stickers and for each
+// letter, whichever side has more wins. Returns false if `saved` isn't a progress backup.
+export function importProgress(saved) {
+  if (!saved || !Array.isArray(saved.stickers) || typeof saved.items !== 'object') return false;
+  if (saved.stickers.length > state.stickers.length) {
+    state.stickers = [...saved.stickers];
+    state.seen = Math.min(Number(saved.seen) || 0, state.stickers.length);
+  }
+  const size = (e) => (e ? (e.asked || 0) + (e.traced || 0) : -1);
+  for (const [k, v] of Object.entries(saved.items)) {
+    if (size(v) > size(state.items[k])) state.items[k] = { ...blank(), ...v };
+  }
+  save();
+  return true;
+}
+
 // Clears what she has practised (the game starts adapting from scratch). Stickers stay.
 export function resetStats() {
   state.items = {};

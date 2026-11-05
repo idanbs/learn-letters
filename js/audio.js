@@ -128,11 +128,25 @@ function halt() {
   finishCurrent = null;
 }
 
+// A burst of calls (cards flipped back and forth, frantic tapping) waits this long and only the
+// last one speaks. Restarting the voice many times a second is what trips up iOS speech.
+const BURST_GAP_MS = 350;
+const BURST_WAIT_MS = 170;
+let lastSayAt = -Infinity;
+
 // Resolves true when everything was said, false if it was interrupted by another say()/stopAll().
+// The first call after a quiet moment plays at once; only rapid repeats are held back a beat.
 export function say(...keys) {
   const my = ++token;
   halt();
+  const now = performance.now();
+  const burst = now - lastSayAt < BURST_GAP_MS;
+  lastSayAt = now;
   return (async () => {
+    if (burst) {
+      await wait(BURST_WAIT_MS);
+      if (my !== token) return false;
+    }
     for (const key of keys) {
       if (my !== token) return false;
       await playClip(key, my);
@@ -146,9 +160,15 @@ const hasAudio = (key) => recorded.has(key) || !!manifest[key];
 // Readies recordings one at a time in the background, so a clip that is actually tapped
 // never waits behind a whole screen's worth of loading.
 let preloadQueue = Promise.resolve();
+const queued = new Set(); // flipping between screens shouldn't pile up the same work
 export function preload(keys) {
   for (const key of keys) {
-    if (recorded.has(key) && !urls.has(key)) preloadQueue = preloadQueue.then(() => clipUrl(key)).catch(() => {});
+    if (!recorded.has(key) || urls.has(key) || queued.has(key)) continue;
+    queued.add(key);
+    preloadQueue = preloadQueue
+      .then(() => clipUrl(key))
+      .catch(() => {})
+      .finally(() => queued.delete(key));
   }
 }
 
@@ -167,36 +187,58 @@ async function clipUrl(key) {
   return url;
 }
 
+const START_TIMEOUT_MS = 2500;
+
 function playUrl(url) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    let timer = 0;
+    let startTimer = 0;
+    let endTimer = 0;
     const settle = (fn, arg) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(startTimer);
+      clearTimeout(endTimer);
       player.onended = null;
       player.onerror = null;
+      player.onplaying = null;
       fn(arg);
     };
     player.onended = () => settle(resolve);
     player.onerror = () => settle(reject, new Error('audio playback failed'));
+    // A clip that never starts (iOS sometimes swallows a load) is retried instead of blocking.
+    startTimer = setTimeout(() => settle(reject, new Error('audio did not start')), START_TIMEOUT_MS);
+    player.onplaying = () => {
+      clearTimeout(startTimer);
+      const seconds = Number.isFinite(player.duration) && player.duration > 0 ? player.duration : 8;
+      clearTimeout(endTimer);
+      endTimer = setTimeout(() => settle(resolve), (seconds + 1.5) * 1000);
+    };
     finishCurrent = () => settle(resolve);
-    timer = setTimeout(() => settle(resolve), 20000); // never hang the app on a stuck clip
     player.src = url;
-    player.play()?.catch((err) => settle(reject, err));
+    player.play()?.catch((err) => {
+      // AbortError just means a newer clip replaced this one: not a failure.
+      if (err?.name !== 'AbortError') settle(reject, err);
+    });
   });
 }
 
 async function playClip(key, my) {
   if (hasAudio(key)) {
-    try {
-      const url = await clipUrl(key);
-      if (my !== token) return;
-      await playUrl(url);
-      return;
-    } catch {
-      // fall through to text-to-speech
+    // One retry before giving up on a recording: a hiccup shouldn't swap in the robot voice.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const url = await clipUrl(key);
+        if (my !== token) return;
+        await playUrl(url);
+        return;
+      } catch {
+        if (my !== token) return;
+        if (attempt === 0) {
+          await wait(120);
+          if (my !== token) return;
+        }
+      }
     }
   }
   if (my !== token) return;

@@ -3,7 +3,7 @@ import { go } from './nav.js';
 import { home } from './screens.js';
 import { KINDS } from './kinds.js';
 import { CLIPS, CLIP_GROUPS } from './data.js';
-import { statsFor, stickers, resetStats } from './progress.js';
+import { statsFor, stickers, resetStats, exportProgress, importProgress } from './progress.js';
 import { checkForUpdate, installedVersion } from './updates.js';
 import { say, stopAll, sourceOf, markRecorded, refreshRecordings, audioContext, fileManifest } from './audio.js';
 import { saveRecording, loadRecording, removeRecording, recordingKeys, keepRecordings } from './recordings.js';
@@ -77,6 +77,7 @@ function progressSection() {
     );
   };
   render();
+  section.refresh = render;
   return section;
 }
 
@@ -105,6 +106,7 @@ function appSection() {
 // ---------- Checklist ----------
 
 export function parents() {
+  const progressEl = progressSection();
   const summary = h('div', { class: 'rec-summary' });
   const list = h('div', { class: 'rec-groups' });
   const importInput = h('input', { type: 'file', accept: '.zip,application/zip', hidden: true });
@@ -132,7 +134,7 @@ export function parents() {
       h(
         'p',
         { class: 'rec-help' },
-        'ההקלטות נשמרות רק במכשיר הזה. מה שלא הוקלט נשמע בקול המובנה. "גיבוי" יוצר קובץ להעברה לאייפון או לשמירה.',
+        'ההקלטות, המדבקות וההתקדמות נשמרים רק במכשיר הזה. מה שלא הוקלט נשמע בקול המובנה. "גיבוי" יוצר קובץ אחד עם הכול, לשמירה או להעברה למכשיר אחר.',
       ),
     );
     list.replaceChildren(
@@ -170,12 +172,14 @@ export function parents() {
   async function exportBackup() {
     if (prepared) return share(prepared);
     const keys = await recordingKeys();
-    if (!keys.length) {
-      toast('אין עדיין הקלטות לגבות');
+    const progress = exportProgress();
+    if (!keys.length && !progress.stickers.length && !Object.keys(progress.items).length) {
+      toast('אין עדיין מה לגבות');
       return;
     }
     const manifest = fileManifest();
-    const files = [];
+    // Stickers and progress travel along, so a reinstall or a second device can pick them up too.
+    const files = [{ name: 'progress.json', data: new TextEncoder().encode(JSON.stringify(progress)) }];
     for (const key of keys) {
       const r = await loadRecording(key);
       if (!r) continue;
@@ -214,7 +218,16 @@ export function parents() {
     if (!file) return;
     try {
       let n = 0;
+      let progressBack = false;
       for (const { name, data } of await readZip(file)) {
+        if (/(?:^|\/)progress\.json$/.test(name)) {
+          try {
+            progressBack = importProgress(JSON.parse(new TextDecoder().decode(data)));
+          } catch {
+            // not ours: ignore
+          }
+          continue;
+        }
         const key = name.match(/(?:^|\/)([\w-]+)\.wav$/)?.[1];
         if (!key || !(key in CLIPS)) continue;
         await saveRecording(key, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
@@ -224,7 +237,12 @@ export function parents() {
       keepRecordings();
       prepared = null;
       render();
-      toast(n ? `שוחזרו ${n} הקלטות` : 'לא נמצאו הקלטות בקובץ');
+      progressEl.refresh();
+      toast(
+        n || progressBack
+          ? [n ? `שוחזרו ${n} הקלטות` : '', progressBack ? 'המדבקות וההתקדמות חזרו' : ''].filter(Boolean).join(', ')
+          : 'לא נמצא בקובץ מה לשחזר',
+      );
     } catch {
       toast('לא הצלחתי לקרוא את הקובץ');
     }
@@ -232,7 +250,7 @@ export function parents() {
 
   const el = layout(
     { onBack: () => go(home), backIcon: 'home', middle: h('h2', { class: 'bar-title' }, 'מצב הורים'), cls: 'parents' },
-    h('main', { class: 'rec-page' }, installed() ? null : installNote(), appSection(), progressSection(), summary, list, importInput),
+    h('main', { class: 'rec-page' }, installed() ? null : installNote(), appSection(), progressEl, summary, list, importInput),
   );
   return { el, enter: render };
 }
@@ -373,6 +391,7 @@ export function recorder(start = 0) {
   }
 
   async function removeCurrent() {
+    if (!confirm('למחוק את ההקלטה הזאת? במקומה יישמע הקול המובנה.')) return;
     const key = item().key;
     await removeRecording(key);
     markRecorded(key, false);

@@ -1,7 +1,7 @@
 // Offline support: cache the whole app on install, then serve from cache and
 // refresh in the background (an update shows up on the next launch).
 // Bump VERSION with every update so the app re-downloads everything in one go.
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = `letters-${VERSION}`;
 const SHELL = [
   './',

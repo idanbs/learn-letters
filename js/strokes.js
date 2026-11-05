@@ -41,8 +41,10 @@ export const LETTER_STROKES = {
     'M 18 9 L 66 9 Q 80 9 80 23 L 80 91',
     'M 22 9 L 22 91',
   ],
+  // The curl is on the right (straight side on the left): start inside the curl, go over it,
+  // down the right side, around the bottom and up the left.
   tet: [
-    'M 50 44 C 50 22 42 9 32 9 C 24 9 20 15 20 25 L 20 60 C 20 80 33 91 50 91 C 67 91 80 80 80 60 L 80 9',
+    'M 50 44 C 50 22 58 9 68 9 C 76 9 80 15 80 25 L 80 60 C 80 80 67 91 50 91 C 33 91 20 80 20 60 L 20 9',
   ],
   yod: [
     'M 38 9 L 48 9 Q 60 9 60 21 L 60 46',
