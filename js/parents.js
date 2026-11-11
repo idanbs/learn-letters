@@ -5,13 +5,19 @@ import { KINDS } from './kinds.js';
 import { CLIPS, CLIP_GROUPS } from './data.js';
 import { statsFor, stickers, resetStats, exportProgress, importProgress } from './progress.js';
 import { checkForUpdate, installedVersion } from './updates.js';
-import { say, stopAll, sourceOf, markRecorded, refreshRecordings, audioContext, fileManifest } from './audio.js';
+import {
+  say, stopAll, sourceOf, markRecorded, refreshRecordings, audioContext, fileManifest,
+  soundLog, onSoundLog, audioMode, setAudioMode, canSetAudioMode,
+} from './audio.js';
 import { saveRecording, loadRecording, removeRecording, recordingKeys, keepRecordings } from './recordings.js';
 import { canRecord, startRecording, cleanUp } from './recorder.js';
 import { makeZip, readZip } from './zip.js';
 import { h, button, icon, layout, toast } from './ui.js';
 
 const ITEMS = CLIP_GROUPS.flatMap((g) => g.items.map((item) => ({ ...item, group: g })));
+
+// Openings are heard joined with an example, so the parent hears how the join sounds.
+const preview = (key) => ({ 'find-letter': 'find-alef', 'find-number': 'find-num-1' })[key] || key;
 const MAX_SECONDS = 8;
 
 const recordedCount = () => ITEMS.filter((i) => sourceOf(i.key) === 'recorded').length;
@@ -103,10 +109,79 @@ function appSection() {
   return h('section', { class: 'app-info' }, version, check);
 }
 
+// ---------- Sound check ----------
+// Shows how each phrase actually played on this device, to compare devices or iOS versions.
+
+const ENGINE = {
+  recording: 'הקלטה',
+  file: 'קובץ',
+  voice: 'הקול המובנה',
+  'voice (recording failed)': 'הקול המובנה (ההקלטה נכשלה)',
+};
+
+function soundSection() {
+  const list = h('div', { class: 'sound-log' });
+  const modeRow = h('div', { class: 'rec-actions' });
+  const renderLog = () => {
+    const rows = soundLog();
+    list.replaceChildren(
+      ...(rows.length
+        ? rows.map((r) =>
+            h(
+              'div',
+              { class: 'sound-row' },
+              h('span', { class: 'sound-text' }, r.text),
+              h(
+                'span',
+                { class: 'sound-meta' },
+                r.startMs === null
+                  ? `${ENGINE[r.kind] || r.kind} · זמן ההתחלה לא דווח`
+                  : `${ENGINE[r.kind] || r.kind} · התחיל אחרי ${r.startMs}ms (מהלחיצה ${r.sinceTapMs}ms)`,
+              ),
+            ),
+          )
+        : [h('p', { class: 'rec-help' }, 'עוד לא הושמע כלום. אפשר ללחוץ "לנסות", או לשחק קצת ולחזור לכאן.')]),
+    );
+  };
+  const renderMode = () => {
+    if (!canSetAudioMode()) {
+      modeRow.replaceChildren();
+      return;
+    }
+    const mode = audioMode();
+    modeRow.replaceChildren(
+      button(`pill-btn small${mode === 'playback' ? ' primary' : ''}`, 'מצב playback', () => {
+        setAudioMode('playback');
+        renderMode();
+      }),
+      button(`pill-btn small${mode === 'auto' ? ' primary' : ''}`, 'מצב auto', () => {
+        setAudioMode('auto');
+        renderMode();
+      }),
+    );
+  };
+  renderLog();
+  renderMode();
+  const section = h(
+    'section',
+    { class: 'progress' },
+    h('h3', {}, 'בדיקת צליל'),
+    h('div', { class: 'rec-actions' }, button('pill-btn', [icon('play'), 'לנסות'], () => say('find-alef', 'name-alef', 'word-alef'))),
+    modeRow,
+    canSetAudioMode()
+      ? h('p', { class: 'rec-help' }, 'playback: מתנגן גם כשהמתג השקט דלוק (ברירת המחדל כאן). auto: ההתנהגות הרגילה של ספארי. אם הצליל קופצני או מתעכב, כדאי לנסות את השני ולהשוות את הזמנים.')
+      : null,
+    list,
+  );
+  section.unsubscribe = onSoundLog(renderLog);
+  return section;
+}
+
 // ---------- Checklist ----------
 
 export function parents() {
   const progressEl = progressSection();
+  const soundEl = soundSection();
   const summary = h('div', { class: 'rec-summary' });
   const list = h('div', { class: 'rec-groups' });
   const importInput = h('input', { type: 'file', accept: '.zip,application/zip', hidden: true });
@@ -164,7 +239,7 @@ export function parents() {
         () => go(recorder, index),
         CLIPS[item.key],
       ),
-      button('mini-btn', icon('play'), () => say(item.key), 'להשמיע'),
+      button('mini-btn', icon('play'), () => say(preview(item.key)), 'להשמיע'),
     );
   }
 
@@ -250,9 +325,9 @@ export function parents() {
 
   const el = layout(
     { onBack: () => go(home), backIcon: 'home', middle: h('h2', { class: 'bar-title' }, 'מצב הורים'), cls: 'parents' },
-    h('main', { class: 'rec-page' }, installed() ? null : installNote(), appSection(), progressEl, summary, list, importInput),
+    h('main', { class: 'rec-page' }, installed() ? null : installNote(), appSection(), progressEl, summary, list, soundEl, importInput),
   );
-  return { el, enter: render };
+  return { el, enter: render, leave: () => soundEl.unsubscribe() };
 }
 
 // ---------- One-by-one recorder ----------
@@ -276,7 +351,7 @@ export function recorder(start = 0) {
   const msg = h('p', { class: 'rec-msg', role: 'status' });
   const recLabel = h('div', { class: 'rec-label' });
   const recBtn = button('rec-btn', h('span', { class: 'rec-btn-mark' }), toggle, 'הקלטה');
-  const playBtn = button('pill-btn', [icon('play'), 'להשמיע'], () => say(item().key));
+  const playBtn = button('pill-btn', [icon('play'), 'להשמיע'], () => say(preview(item().key)));
   const prevBtn = button('nav-btn prev', icon('prev'), () => show(i - 1), 'הקודם');
   const nextBtn = button('nav-btn next', icon('next'), () => show(i + 1), 'הבא');
 
@@ -379,7 +454,7 @@ export function recorder(start = 0) {
     if (!alive) return;
     setState('idle');
     // Give iOS a moment to switch the speaker back after the microphone closes.
-    if (sourceOf(key) === 'recorded') setTimeout(() => alive && item().key === key && state === 'idle' && say(key), 250);
+    if (sourceOf(key) === 'recorded') setTimeout(() => alive && item().key === key && state === 'idle' && say(preview(key)), 250);
   }
 
   function cancelRecording() {

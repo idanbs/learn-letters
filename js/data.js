@@ -54,6 +54,9 @@ export const CLIPS = {
   'praise-5': 'בְּדִיּוּק!',
   'stars-5': 'הִצְלַחְנוּ! חֲמִשָּׁה כּוֹכָבִים!',
   'how-many': 'כַּמָּה יֵשׁ?',
+  // Shared openings: recorded once, then joined with the letter's (or number's) name.
+  'find-letter': 'אֵיפֹה הָאוֹת',
+  'find-number': 'אֵיפֹה הַמִּסְפָּר',
 };
 for (const l of LETTERS) {
   CLIPS[`name-${l.id}`] = l.name;
@@ -64,6 +67,14 @@ for (const x of NUMBERS) {
   CLIPS[`num-${x.n}`] = x.name;
   CLIPS[`find-num-${x.n}`] = `אֵיפֹה הַמִּסְפָּר ${x.name}?`;
 }
+
+// Questions built from two recordings: "where is the letter" + "alef". The full sentence above
+// is still what the device voice reads when nothing is recorded.
+export const PARTS = {};
+for (const l of LETTERS) PARTS[`find-${l.id}`] = ['find-letter', `name-${l.id}`];
+for (const x of NUMBERS) PARTS[`find-num-${x.n}`] = ['find-number', `num-${x.n}`];
+// Openings that flow straight into the next word, with no pause in between.
+export const LEADS_IN = new Set(['find-letter', 'find-number']);
 
 // The parents' recording checklist, in recording order.
 export const CLIP_GROUPS = [
@@ -84,20 +95,20 @@ export const CLIP_GROUPS = [
   },
   {
     title: 'אותיות',
-    items: LETTERS.flatMap((l) => [
-      { key: `name-${l.id}`, hint: `שם האות ${l.char}` },
-      { key: `word-${l.id}`, hint: `${l.emoji} המילה בכרטיסייה של ${l.char}` },
-      { key: `find-${l.id}`, hint: 'שאלה במשחק "איפה?"' },
-    ]),
+    items: [
+      { key: 'find-letter', hint: 'במשחק "איפה?" שם האות מתחבר לזה. להגיד כמו התחלה של שאלה' },
+      ...LETTERS.flatMap((l) => [
+        { key: `name-${l.id}`, hint: `שם האות ${l.char}` },
+        { key: `word-${l.id}`, hint: `${l.emoji} המילה בכרטיסייה של ${l.char}` },
+      ]),
+    ],
   },
   {
     title: 'מספרים',
     items: [
+      { key: 'find-number', hint: 'במשחק "איפה?" המספר מתחבר לזה. להגיד כמו התחלה של שאלה' },
       { key: 'how-many', hint: 'שאלה במשחק "איפה?" כשסופרים חפצים' },
-      ...NUMBERS.flatMap((x) => [
-      { key: `num-${x.n}`, hint: `המספר ${x.n} (גם בספירה)` },
-      { key: `find-num-${x.n}`, hint: 'שאלה במשחק "איפה?"' },
-      ]),
+      ...NUMBERS.map((x) => ({ key: `num-${x.n}`, hint: `המספר ${x.n} (גם בספירה)` })),
     ],
   },
 ];
